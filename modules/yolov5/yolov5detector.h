@@ -3,6 +3,7 @@
 
 #include "layer.h"
 #include <vector>
+#include "net.h"
 
 struct Object
 {
@@ -43,14 +44,15 @@ private:
 private:
     const char *m_pParamPath;
     const char *m_pBinPath;
+    ncnn::Net m_Yolov5Net;
 
 public:
     // anchor setting from yolov5/models/yolov5s.yaml
     std::vector<YoloLayerData> m_vLayers
     {
         {"output", 8,  {{10,13}, {16,30},  {33,23}}},
-        {"781",    16, {{30,61}, {62,45},  {59,119}}},
-        {"801",    32, {{116,90},{156,198},{373,326}}},
+        {"427",    16, {{30,61}, {62,45},  {59,119}}},
+        {"452",    32, {{116,90},{156,198},{373,326}}},
     };
 
     std::vector<std::string> m_sClassNames{

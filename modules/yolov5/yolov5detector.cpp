@@ -12,18 +12,21 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
-#include "net.h"
-
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
 #include <stdio.h>
 #include "yolov5detector.h"
+#include "commonfunction.h"
 
 CYolov5Detector::CYolov5Detector(const char *paramPath, const char* binPath) :
     m_pParamPath(paramPath), m_pBinPath(binPath)
 {
+    m_Yolov5Net.opt.use_vulkan_compute = true;
+    m_Yolov5Net.register_custom_layer("YoloV5Focus", YoloV5Focus_layer_creator);
 
+    m_Yolov5Net.load_param(m_pParamPath);
+    m_Yolov5Net.load_model(m_pBinPath);
 }
 
 CYolov5Detector::~CYolov5Detector()
@@ -32,17 +35,18 @@ CYolov5Detector::~CYolov5Detector()
 }
 int CYolov5Detector::detect(const cv::Mat& bgr, std::vector<Object>& objects)
 {
-    ncnn::Net yolov5;
+    // ncnn::Net yolov5;
 
-    yolov5.opt.use_vulkan_compute = true;
+    // yolov5.opt.use_vulkan_compute = true;
     // yolov5.opt.use_bf16_storage = true;
-    yolov5.register_custom_layer("YoloV5Focus", YoloV5Focus_layer_creator);
+    // yolov5.register_custom_layer("YoloV5Focus", YoloV5Focus_layer_creator);
 
     // original pretrained model from https://github.com/ultralytics/yolov5
     // the ncnn model https://github.com/nihui/ncnn-assets/tree/master/models
-    yolov5.load_param(m_pParamPath);
-    yolov5.load_model(m_pBinPath);
-    const int target_size = 640;
+    // yolov5.load_param(m_pParamPath);
+    // yolov5.load_model(m_pBinPath);
+    QC_TIME_S dataTime1, dataTime2;
+    const int target_size = 480;
     const float prob_threshold = 0.25f;
     const float nms_threshold = 0.45f;
 
@@ -65,28 +69,28 @@ int CYolov5Detector::detect(const cv::Mat& bgr, std::vector<Object>& objects)
         h = target_size;
         w = w * scale;
     }
-
     ncnn::Mat in = ncnn::Mat::from_pixels_resize(bgr.data, ncnn::Mat::PIXEL_BGR2RGB, img_w, img_h, w, h);
-
     // pad to target_size rectangle
     // yolov5/utils/datasets.py letterbox
     int wpad = (w + 31) / 32 * 32 - w;
     int hpad = (h + 31) / 32 * 32 - h;
+
     ncnn::Mat in_pad;
     ncnn::copy_make_border(in, in_pad, hpad / 2, hpad - hpad / 2, wpad / 2, wpad - wpad / 2, ncnn::BORDER_CONSTANT, 114.f);
 
     const float norm_vals[3] = {1 / 255.f, 1 / 255.f, 1 / 255.f};
     in_pad.substract_mean_normalize(0, norm_vals);
 
-    ncnn::Extractor ex = yolov5.create_extractor();
+    ncnn::Extractor ex = m_Yolov5Net.create_extractor();
     ex.input("images", in_pad);
 
     std::vector<Object> proposals;
-    
+
     for(unsigned int i = 0; i < m_vLayers.size(); ++i)
     {
         ncnn::Mat out;
         ex.extract(m_vLayers[i].outName.c_str(), out);
+
         ncnn::Mat anchors(6);
         anchors[0] = m_vLayers[i].anchors[0].width;
         anchors[1] = m_vLayers[i].anchors[0].height;
@@ -94,7 +98,7 @@ int CYolov5Detector::detect(const cv::Mat& bgr, std::vector<Object>& objects)
         anchors[3] = m_vLayers[i].anchors[1].height;
         anchors[4] = m_vLayers[i].anchors[2].width;
         anchors[5] = m_vLayers[i].anchors[2].height;
-        
+      
         std::vector<Object> objects;
         generateProposals(anchors, m_vLayers[i].stride, in_pad, out, prob_threshold, objects);
         proposals.insert(proposals.end(), objects.begin(), objects.end());
@@ -136,7 +140,7 @@ int CYolov5Detector::detect(const cv::Mat& bgr, std::vector<Object>& objects)
 
 int CYolov5Detector::drawObjects(const cv::Mat& bgr, std::vector<Object>& objects)
 {
-    cv::Mat image = bgr.clone();
+    cv::Mat image = bgr;
 
     for (size_t i = 0; i < objects.size(); i++)
     {
@@ -145,7 +149,13 @@ int CYolov5Detector::drawObjects(const cv::Mat& bgr, std::vector<Object>& object
         fprintf(stderr, "%d = %.5f at %.2f %.2f %.2f x %.2f\n", obj.label, obj.prob,
                 obj.rect.x, obj.rect.y, obj.rect.width, obj.rect.height);
 
-        cv::rectangle(image, obj.rect, cv::Scalar(255, 0, 0));
+        cv::Scalar color;
+        if(obj.label==0)
+            color = cv::Scalar(0, 0, 0xFF);
+        else
+            color = cv::Scalar(0xFF, 0, 0);
+
+        cv::rectangle(image, obj.rect, color, 2);
 
         char text[256];
         sprintf(text, "%s %.1f%%", m_sClassNames[obj.label].c_str(), obj.prob * 100);
@@ -160,15 +170,15 @@ int CYolov5Detector::drawObjects(const cv::Mat& bgr, std::vector<Object>& object
         if (x + label_size.width > image.cols)
             x = image.cols - label_size.width;
 
-        cv::rectangle(image, cv::Rect(cv::Point(x, y), cv::Size(label_size.width, label_size.height + baseLine)),
-                      cv::Scalar(255, 255, 255), -1);
+        // cv::rectangle(image, cv::Rect(cv::Point(x, y), cv::Size(label_size.width, label_size.height + baseLine)),
+        //               cv::Scalar(255, 255, 255), -1);
 
         cv::putText(image, text, cv::Point(x, y + label_size.height),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0));
+                    cv::FONT_HERSHEY_SIMPLEX, 0.5, color, 2);
     }
 
     cv::imshow("image", image);
-    cv::waitKey(0);
+    // cv::waitKey(0);
 
     return 0;
 }
@@ -310,6 +320,10 @@ void CYolov5Detector::generateProposals(const ncnn::Mat& anchors, int stride, co
                         class_score = score;
                     }
                 }
+            #if 0
+                if (class_index != boat)
+                    continue;
+            #endif
 
                 float box_score = featptr[4];
 
@@ -358,27 +372,3 @@ ncnn::Layer *YoloV5Focus_layer_creator(void *)
     return new YoloV5Focus;
 }
 
-// int main(int argc, char** argv)
-// {
-//     if (argc != 2)
-//     {
-//         fprintf(stderr, "Usage: %s [imagepath]\n", argv[0]);
-//         return -1;
-//     }
-
-//     const char* imagepath = argv[1];
-//     cv::Mat m = cv::imread(imagepath, 1);
-//     if (m.empty())
-//     {
-//         fprintf(stderr, "cv::imread %s failed\n", imagepath);
-//         return -1;
-//     }
-//     std::vector<Object> objects;
-
-//     CYolov5Detector CYolov5("/home/llc/work/pig/cproject/modules/yolov5/yolov5s.param", 
-//                             "/home/llc/work/pig/cproject/modules/yolov5/yolov5s.bin");
-//     CYolov5.detect(m, objects);
-//     CYolov5.drawObjects(m, objects);
-
-//     return 0;
-// }

@@ -13,6 +13,9 @@
 #ifndef _COMM_FUNCTION_H_
 #define _COMM_FUNCTION_H_
 
+#include "qccommondatatype.h"
+
 void mSleep(int milliSecond);
+QC_S32 getSysDataTime(QC_TIME_S &dataTime);
 
 #endif // _COMM_FUNCTION_H_
